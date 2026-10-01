@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run alucard.train with live DataLoader progress bars.
+"""Run alucard.train with live Colab-friendly progress bars.
 
 This wrapper keeps the trainer math unchanged while adding two runtime controls:
-- live tqdm progress for every DataLoader iterator;
+- live tqdm progress for every DataLoader iterator, forced to stdout;
 - ``--no-gradient-checkpointing`` to trade VRAM for speed on GPUs with headroom.
 
 All other CLI arguments are passed through to ``python -m alucard.train``.
@@ -10,12 +10,23 @@ All other CLI arguments are passed through to ``python -m alucard.train``.
 
 from __future__ import annotations
 
+import os
 import sys
 
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 
 def main() -> None:
+    # Force immediate child-process output in Colab.
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    try:
+        sys.stdout.reconfigure(line_buffering=True, write_through=True)
+        sys.stderr.reconfigure(line_buffering=True, write_through=True)
+    except Exception:
+        pass
+
+    print("[Alucard] progress wrapper started", flush=True)
+
     disable_checkpointing = "--no-gradient-checkpointing" in sys.argv
     if disable_checkpointing:
         # Remove our wrapper-only flag before alucard.train's argparse sees it.
@@ -38,7 +49,9 @@ def main() -> None:
                 desc=f"batches #{counter['n']}",
                 dynamic_ncols=True,
                 leave=True,
-                mininterval=0.5,
+                mininterval=0.25,
+                file=sys.stdout,
+                ascii=False,
             )
         )
 
