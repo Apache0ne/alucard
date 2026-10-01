@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run alucard.train with live DataLoader progress bars.
 
-This wrapper intentionally leaves the trainer math unchanged. It wraps every
-DataLoader iterator with tqdm so Colab shows batch progress immediately for
-both training and validation. Use the same CLI arguments accepted by
-``python -m alucard.train``.
+This wrapper keeps the trainer math unchanged while adding two runtime controls:
+- live tqdm progress for every DataLoader iterator;
+- ``--no-gradient-checkpointing`` to trade VRAM for speed on GPUs with headroom.
+
+All other CLI arguments are passed through to ``python -m alucard.train``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,11 @@ from tqdm.auto import tqdm
 
 
 def main() -> None:
+    disable_checkpointing = "--no-gradient-checkpointing" in sys.argv
+    if disable_checkpointing:
+        # Remove our wrapper-only flag before alucard.train's argparse sees it.
+        sys.argv.remove("--no-gradient-checkpointing")
+
     # Patch before importing alucard.train so all loaders created by the trainer
     # get visible iteration progress without duplicating the training code.
     from torch.utils.data import DataLoader
@@ -25,8 +31,6 @@ def main() -> None:
     def progress_iter(self):
         iterator = original_iter(self)
         counter["n"] += 1
-        # The trainer iterates train then validation each epoch. A generic label
-        # is deliberate because this wrapper does not alter trainer internals.
         return iter(
             tqdm(
                 iterator,
@@ -39,6 +43,20 @@ def main() -> None:
         )
 
     DataLoader.__iter__ = progress_iter
+
+    if disable_checkpointing:
+        # train.py calls enable_gradient_checkpointing() when it builds the UNet.
+        # Override that one method for this process only. The subprocess exits
+        # after training, so no modified state survives into benchmarking.
+        from alucard.model import UNet
+
+        def _keep_checkpointing_disabled(self):
+            self.disable_gradient_checkpointing()
+
+        UNet.enable_gradient_checkpointing = _keep_checkpointing_disabled
+        print("[Alucard] Gradient checkpointing: OFF (fast mode)", flush=True)
+    else:
+        print("[Alucard] Gradient checkpointing: ON (memory-saving mode)", flush=True)
 
     from alucard.train import main as train_main
 
