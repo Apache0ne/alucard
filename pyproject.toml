@@ -16,6 +16,7 @@ dependencies = [
     "accelerate>=0.25.0",
     "safetensors",
     "open-clip-torch>=2.24.0",
+    "datasets>=3.0.0",
     "gradio>=4.0.0",
 ]
 
