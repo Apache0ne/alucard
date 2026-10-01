@@ -18,11 +18,22 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 
-def timestep_embedding(t: torch.Tensor, dim: int, max_period: int = 10000) -> torch.Tensor:
-    """Sinusoidal timestep embedding. t: (B,) float in [0, 1]."""
+def timestep_embedding(
+    t: torch.Tensor,
+    dim: int,
+    max_period: int = 10000,
+    scale: float = 1.0,
+) -> torch.Tensor:
+    """Sinusoidal timestep embedding for normalized flow time.
+
+    ``scale`` is explicit because feeding t in [0,1] directly into the classic
+    diffusion embedding uses only a tiny fraction of its frequency range. New
+    v2 checkpoints train with scale=1000 while old checkpoints remain
+    compatible with the default scale=1.
+    """
     half = dim // 2
     freqs = torch.exp(-math.log(max_period) * torch.arange(half, device=t.device, dtype=torch.float32) / half)
-    args = t[:, None].float() * freqs[None, :]
+    args = (t[:, None].float() * scale) * freqs[None, :]
     emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
     if dim % 2:
         emb = F.pad(emb, (0, 1))
@@ -163,9 +174,11 @@ class UNet(nn.Module):
         text_dim: int = 512,
         dropout: float = 0.0,
         image_size: int = 128,
+        timestep_scale: float = 1.0,
     ):
         super().__init__()
         self.image_size = image_size
+        self.timestep_scale = float(timestep_scale)
         num_levels = len(channel_mults)
         cond_dim = base_channels * 4  # 512-dim conditioning space
 
@@ -269,7 +282,7 @@ class UNet(nn.Module):
         h = torch.cat([x, ref], dim=1)  # (B, 8, H, W)
 
         # Conditioning: time + text
-        t_emb = timestep_embedding(t, self.time_mlp[0].in_features)
+        t_emb = timestep_embedding(t, self.time_mlp[0].in_features, scale=self.timestep_scale)
         c = self.time_mlp(t_emb) + self.text_proj(text_emb)
 
         # Input
