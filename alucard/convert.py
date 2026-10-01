@@ -4,11 +4,6 @@ Convert an Alucard training checkpoint to safetensors format for distribution.
 
 Extracts the EMA model weights (or regular model if no EMA) and saves them
 as a single .safetensors file along with a config JSON.
-
-Usage:
-    python scripts/convert_to_safetensors.py \
-        --checkpoint checkpoints/checkpoint_0200.pt \
-        --output alucard_model.safetensors
 """
 
 import argparse
@@ -35,11 +30,9 @@ def main():
     if not output_path.suffix == ".safetensors":
         output_path = output_path.with_suffix(".safetensors")
 
-    # Load checkpoint
     print(f"Loading checkpoint: {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
 
-    # Select weights
     if args.no_ema:
         state_dict = ckpt["model"]
         print("Using training weights")
@@ -50,20 +43,16 @@ def main():
         state_dict = ckpt["model"]
         print("No EMA weights found, using training weights")
 
-    # Convert to float16 if requested
     if args.half:
         state_dict = {k: v.half() for k, v in state_dict.items()}
         print("Converted to float16")
 
-    # Save as safetensors
     save_file(state_dict, output_path)
     size_mb = output_path.stat().st_size / 1024**2
     print(f"Saved: {output_path} ({size_mb:.1f} MB)")
 
-    # Save config alongside
     config_path = output_path.with_suffix(".json")
-    config = {
-        "architecture": "alucard-unet",
+    model_config = ckpt.get("model_config", {
         "in_channels": 8,
         "out_channels": 4,
         "base_channels": 64,
@@ -72,6 +61,12 @@ def main():
         "attn_resolutions": [32, 16],
         "text_dim": 512,
         "image_size": 128,
+        "timestep_scale": 1.0,
+    })
+    config = {
+        "architecture": "alucard-unet",
+        "model": model_config,
+        **model_config,
         "text_encoder": "openai/clip-vit-base-patch32",
         "parameters": sum(v.numel() for v in state_dict.values()),
         "dtype": "float16" if args.half else "float32",
@@ -83,8 +78,7 @@ def main():
     config_path.write_text(json.dumps(config, indent=2))
     print(f"Config: {config_path}")
 
-    # Print summary
-    print(f"\nModel summary:")
+    print("\nModel summary:")
     print(f"  Parameters: {config['parameters']:,}")
     print(f"  Dtype: {config['dtype']}")
     print(f"  Epoch: {config['source_epoch']}")
