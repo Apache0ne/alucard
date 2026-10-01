@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import torch
@@ -34,26 +35,47 @@ def main():
     emb_path = out / "clip_embeddings.pt"
     meta_path = out / "metadata.json"
 
-    if hf_path.exists() and not args.force:
+    previous_meta = {}
+    if meta_path.exists():
+        try:
+            previous_meta = json.loads(meta_path.read_text())
+        except Exception:
+            previous_meta = {}
+
+    requested_max = max(0, int(args.max_samples))
+    cache_matches_request = (
+        previous_meta.get("repo") == args.repo
+        and previous_meta.get("split") == args.split
+        and previous_meta.get("requested_max_samples") == requested_max
+    )
+
+    reuse_dataset = hf_path.exists() and not args.force and cache_matches_request
+    if reuse_dataset:
         from datasets import load_from_disk
         ds = load_from_disk(str(hf_path))
         print(f"Using existing dataset: {hf_path} ({len(ds):,} rows)")
     else:
+        if hf_path.exists() and not args.force:
+            print("Cached dataset settings differ from this request; rebuilding it.")
         print(f"Downloading {args.repo} [{args.split}] ...")
         ds = load_dataset(args.repo, split=args.split)
-        if args.max_samples > 0:
-            ds = ds.select(range(min(args.max_samples, len(ds))))
+        source_rows = len(ds)
+        if requested_max > 0:
+            ds = ds.select(range(min(requested_max, len(ds))))
         if "image" not in ds.column_names or "text" not in ds.column_names:
             raise ValueError(f"Expected image/text columns, found {ds.column_names}")
         if hf_path.exists():
-            import shutil
             shutil.rmtree(hf_path)
         ds.save_to_disk(str(hf_path))
-        print(f"Saved Arrow dataset: {hf_path} ({len(ds):,} rows)")
+        print(f"Saved Arrow dataset: {hf_path} ({len(ds):,} rows from {source_rows:,} source rows)")
+        # Any embedding tensor from another dataset selection is invalid.
+        if emb_path.exists():
+            emb_path.unlink()
 
     metadata = {
         "repo": args.repo,
         "split": args.split,
+        "requested_max_samples": requested_max,
         "rows": len(ds),
         "columns": ds.column_names,
         "clip_model": "ViT-B-32",
